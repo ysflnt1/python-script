@@ -1,4 +1,3 @@
-python - <<EOF
 #Full Credits to LimerBoy
 import os
 import re
@@ -101,4 +100,3 @@ if __name__ == '__main__':
                     os.remove("Loginvault.db")
     except Exception as e:
         print("[ERR] %s"%str(e))
-EOF
