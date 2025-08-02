@@ -6,7 +6,7 @@ import json
 import base64
 import sqlite3
 import win32crypt
-from Crypto.Cipher import AES  # ✅ Updated import
+from Crypto.Cipher import AES
 import shutil
 import csv
 
@@ -38,7 +38,10 @@ def decrypt_password(ciphertext, secret_key):
         encrypted_password = ciphertext[15:-16]
         cipher = generate_cipher(secret_key, iv)
         decrypted_pass = decrypt_payload(cipher, encrypted_password)
-        return decrypted_pass.decode()
+        try:
+            return decrypted_pass.decode('utf-8')
+        except UnicodeDecodeError:
+            return f"[RAW HEX] {decrypted_pass.hex()}"
     except Exception as e:
         print(f"[ERR] Unable to decrypt password: {e}")
         return ""
