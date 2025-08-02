@@ -40,11 +40,12 @@ def decrypt_password(ciphertext, secret_key):
         decrypted_pass = decrypt_payload(cipher, encrypted_password)
         try:
             return decrypted_pass.decode('utf-8')
-        except UnicodeDecodeError:
+        except UnicodeDecodeError as decode_err:
+            print(f"[WARN] Could not decode password as UTF-8: {decode_err}")
             return f"[RAW HEX] {decrypted_pass.hex()}"
     except Exception as e:
         print(f"[ERR] Unable to decrypt password: {e}")
-        return ""
+        return "[ERROR]"
 
 def get_db_connection(chrome_path_login_db):
     try:
