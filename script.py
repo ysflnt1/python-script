@@ -32,7 +32,6 @@ def get_encryption_key():
         return None
 
 def decrypt_password(encrypted_password_blob, key):
-    """Decrypt Chrome saved password using AES-GCM or DPAPI fallback."""
     if not encrypted_password_blob:
         print("[WARN] Empty password blob.")
         return "<empty blob>"
@@ -40,8 +39,9 @@ def decrypt_password(encrypted_password_blob, key):
     print(f"[DEBUG] Encrypted blob (hex): {hexlify(encrypted_password_blob).decode()}")
 
     try:
-        if encrypted_password_blob[:3] == b'v10':
-            print("[DEBUG] AES-GCM format detected.")
+        prefix = encrypted_password_blob[:3]
+        if prefix in (b'v10', b'v20'):
+            print(f"[DEBUG] AES-GCM format detected with prefix {prefix.decode()}.")
             iv = encrypted_password_blob[3:15]
             ciphertext = encrypted_password_blob[15:-16]
             tag = encrypted_password_blob[-16:]
@@ -65,6 +65,7 @@ def decrypt_password(encrypted_password_blob, key):
     except Exception as e:
         print(f"[ERROR] Decryption failed: {e}")
         return "<decryption failed>"
+
 
 def main():
     key = get_encryption_key()
