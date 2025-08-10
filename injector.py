@@ -102,8 +102,8 @@ def launch_chrome_get_pid(chrome_path):
     print("[+] Collecting Chrome processes before launch...")
     before_pids = set(p.pid for p in psutil.process_iter(['name']) if p.info['name'] == 'chrome.exe')
 
-    print("[+] Launching Chrome...")
-    proc = subprocess.Popen([chrome_path])
+    print("[+] Launching Chrome without sandbox...")
+    proc = subprocess.Popen([chrome_path, "--no-sandbox"])
 
     print("[+] Waiting for Chrome to start...")
     time.sleep(3)  # Wait for the process to initialize
